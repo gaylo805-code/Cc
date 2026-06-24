@@ -1,0 +1,56 @@
+name: 👾 Termux SSH vào Runner qua ZeroTier
+
+on:
+  workflow_dispatch:   # Kích hoạt bằng tay
+
+jobs:
+  open-ssh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 🔗 Cài & join ZeroTier
+        run: |
+          curl -s https://install.zerotier.com | sudo bash
+          sudo zerotier-cli join b103a835d2b3a8b0
+          echo "⏳ Đợi 15s để nhận IP..."
+          sleep 15
+          sudo zerotier-cli listnetworks
+
+      - name: 🛠 Cài SSH server & cấu hình
+        run: |
+          sudo apt update
+          sudo apt install -y openssh-server neofetch cmatrix htop tmux
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+
+          # Cho phép đăng nhập bằng key (và tắt pass để an toàn hơn)
+          sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+          # Tạo user 'hacker' không mật khẩu, chỉ dùng key
+          sudo useradd -m -s /bin/bash hacker
+          sudo usermod -aG sudo hacker
+
+          # Thêm public key từ Termux của bạn
+          sudo -u hacker mkdir -p /home/hacker/.ssh
+          echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID7I/ki1whAQ2cFGXcZI7qpwnIN6/kM2lU1aFsBQJAKA u0_a240@localhost" | sudo tee /home/hacker/.ssh/authorized_keys
+          sudo chmod 600 /home/hacker/.ssh/authorized_keys
+          sudo chown -R hacker:hacker /home/hacker/.ssh
+
+          echo "✅ SSH server đã sẵn sàng, chỉ chấp nhận key của bạn"
+
+      - name: 📡 In thông tin kết nối
+        run: |
+          ZT_IP=$(sudo zerotier-cli listnetworks | grep -oP '[\d]+\.[\d]+\.[\d]+\.[\d]+' | head -1)
+          echo "================================="
+          echo "  IP ZeroTier runner: $ZT_IP"
+          echo "  User: hacker"
+          echo "  SSH key: đã cài sẵn"
+          echo "================================="
+          echo "Từ Termux, chỉ cần gõ:"
+          echo "ssh hacker@$ZT_IP"
+
+      - name: ⏳ Giữ runner sống
+        run: sleep infinity
