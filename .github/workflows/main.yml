@@ -1,56 +1,115 @@
 name: 👾 Termux SSH vào Runner qua ZeroTier
 
 on:
-  workflow_dispatch:   # Kích hoạt bằng tay
+  workflow_dispatch:
 
 jobs:
   open-ssh:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360  # 6 tiếng
 
     steps:
       - name: 🔗 Cài & join ZeroTier
         run: |
+          echo "📦 Đang cài ZeroTier..."
           curl -s https://install.zerotier.com | sudo bash
+
+          echo "🌐 Đang join network..."
           sudo zerotier-cli join b103a835d2b3a8b0
-          echo "⏳ Đợi 15s để nhận IP..."
-          sleep 15
+
+          echo "⏳ Đợi nhận IP ZeroTier (tối đa 30s)..."
+          for i in $(seq 1 6); do
+            sleep 5
+            ZT_IP=$(sudo zerotier-cli listnetworks 2>/dev/null | grep -oP '[\d]+\.[\d]+\.[\d]+\.[\d]+' | head -1)
+            if [ -n "$ZT_IP" ]; then
+              echo "✅ Đã nhận IP: $ZT_IP"
+              break
+            fi
+            echo "   Thử lần $i/6..."
+          done
+
           sudo zerotier-cli listnetworks
 
       - name: 🛠 Cài SSH server & cấu hình
         run: |
-          sudo apt update
-          sudo apt install -y openssh-server neofetch cmatrix htop tmux
-          sudo systemctl enable ssh
-          sudo systemctl start ssh
+          echo "📦 Đang cài các gói cần thiết..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server neofetch cmatrix htop tmux
 
-          # Cho phép đăng nhập bằng key (và tắt pass để an toàn hơn)
-          sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-          sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+          echo "🔧 Cấu hình SSH server..."
+          sudo tee /etc/ssh/sshd_config.d/99-runner.conf > /dev/null <<'EOF'
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          AuthorizedKeysFile .ssh/authorized_keys
+          PermitEmptyPasswords no
+          X11Forwarding no
+          PrintMotd yes
+          EOF
+
+          sudo systemctl enable ssh --quiet
           sudo systemctl restart ssh
 
-          # Tạo user 'hacker' không mật khẩu, chỉ dùng key
+          echo "👤 Tạo user 'hacker'..."
           sudo useradd -m -s /bin/bash hacker
           sudo usermod -aG sudo hacker
 
-          # Thêm public key từ Termux của bạn
+          # Không cần mật khẩu sudo
+          echo "hacker ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/hacker > /dev/null
+
+          echo "🔑 Cài đặt SSH public key..."
           sudo -u hacker mkdir -p /home/hacker/.ssh
-          echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID7I/ki1whAQ2cFGXcZI7qpwnIN6/kM2lU1aFsBQJAKA u0_a240@localhost" | sudo tee /home/hacker/.ssh/authorized_keys
+          cat <<'PUBKEY' | sudo tee /home/hacker/.ssh/authorized_keys > /dev/null
+          ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID7I/ki1whAQ2cFGXcZI7qpwnIN6/kM2lU1aFsBQJAKA u0_a240@localhost
+          PUBKEY
+
+          sudo chmod 700 /home/hacker/.ssh
           sudo chmod 600 /home/hacker/.ssh/authorized_keys
           sudo chown -R hacker:hacker /home/hacker/.ssh
 
-          echo "✅ SSH server đã sẵn sàng, chỉ chấp nhận key của bạn"
+          echo "✅ SSH server đã sẵn sàng"
 
       - name: 📡 In thông tin kết nối
         run: |
-          ZT_IP=$(sudo zerotier-cli listnetworks | grep -oP '[\d]+\.[\d]+\.[\d]+\.[\d]+' | head -1)
-          echo "================================="
-          echo "  IP ZeroTier runner: $ZT_IP"
-          echo "  User: hacker"
-          echo "  SSH key: đã cài sẵn"
-          echo "================================="
-          echo "Từ Termux, chỉ cần gõ:"
-          echo "ssh hacker@$ZT_IP"
+          ZT_IP=$(sudo zerotier-cli listnetworks 2>/dev/null | grep -oP '[\d]+\.[\d]+\.[\d]+\.[\d]+' | head -1)
+          RUNNER_HOST=$(hostname)
+          RUNNER_CPU=$(nproc)
+          RUNNER_RAM=$(free -h | awk '/^Mem:/ {print $2}')
+          DISK=$(df -h / | awk 'NR==2 {print $4}')
+          EXPIRES=$(date -d '+6 hours' '+%H:%M %Z ngày %d/%m/%Y')
 
-      - name: ⏳ Giữ runner sống
-        run: sleep infinity
+          echo ""
+          echo "╔══════════════════════════════════════════╗"
+          echo "║        🚀 RUNNER SSH SẴN SÀNG 🚀         ║"
+          echo "╠══════════════════════════════════════════╣"
+          printf "║  %-12s %-28s ║\n" "🌐 ZT IP:"    "${ZT_IP:-Chưa nhận được}"
+          printf "║  %-12s %-28s ║\n" "👤 User:"     "hacker"
+          printf "║  %-12s %-28s ║\n" "🔑 Auth:"     "SSH Key (ed25519)"
+          printf "║  %-12s %-28s ║\n" "🖥  Host:"    "$RUNNER_HOST"
+          printf "║  %-12s %-28s ║\n" "⚙️  CPU:"     "${RUNNER_CPU} cores"
+          printf "║  %-12s %-28s ║\n" "💾 RAM:"      "$RUNNER_RAM"
+          printf "║  %-12s %-28s ║\n" "💿 Disk:"     "$DISK free"
+          printf "║  %-12s %-28s ║\n" "⏰ Hết lúc:"  "$EXPIRES"
+          echo "╠══════════════════════════════════════════╣"
+          echo "║  📱 Từ Termux, gõ lệnh:                  ║"
+          printf "║    ssh hacker@%-27s ║\n" "${ZT_IP:-<ZT_IP>}"
+          echo "╚══════════════════════════════════════════╝"
+          echo ""
+
+      - name: ⏳ Giữ runner sống (6 tiếng)
+        run: |
+          echo "🟢 Runner đang chạy... sẽ tự động dừng sau 6 tiếng"
+          echo "   Bắt đầu: $(date '+%H:%M:%S %Z')"
+
+          # Hiển thị heartbeat mỗi 10 phút để log không bị timeout
+          SECONDS_TOTAL=$((6 * 60 * 60))
+          INTERVAL=600
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $SECONDS_TOTAL ]; do
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+            REMAINING=$(( (SECONDS_TOTAL - ELAPSED) / 60 ))
+            echo "💓 [$(date '+%H:%M:%S')] Còn khoảng ${REMAINING} phút..."
+          done
+
+          echo "🔴 Đã hết 6 tiếng, runner dừng."
