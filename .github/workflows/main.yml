@@ -1,115 +1,146 @@
-name: 👾 Termux SSH vào Runner qua ZeroTier
+name: Ubuntu ZeroTier SSH (6h)
 
 on:
   workflow_dispatch:
 
 jobs:
-  open-ssh:
+  ubuntu-6h:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 tiếng
-
+    timeout-minutes: 360  # 6 giờ
+    
     steps:
-      - name: 🔗 Cài & join ZeroTier
+      - name: ⚡ Cài đặt ZeroTier
         run: |
-          echo "📦 Đang cài ZeroTier..."
           curl -s https://install.zerotier.com | sudo bash
+          sudo zerotier-cli version
 
-          echo "🌐 Đang join network..."
-          sudo zerotier-cli join b103a835d2b3a8b0
-
-          echo "⏳ Đợi nhận IP ZeroTier (tối đa 30s)..."
-          for i in $(seq 1 6); do
-            sleep 5
-            ZT_IP=$(sudo zerotier-cli listnetworks 2>/dev/null | grep -oP '[\d]+\.[\d]+\.[\d]+\.[\d]+' | head -1)
-            if [ -n "$ZT_IP" ]; then
-              echo "✅ Đã nhận IP: $ZT_IP"
+      - name: 🔗 Kết nối ZeroTier
+        run: |
+          # Network ID của bạn
+          ZT_NET="b103a835d2b3a8b0"
+          
+          # Join network
+          sudo zerotier-cli join $ZT_NET
+          sleep 3
+          
+          # Hiển thị Node ID
+          NODE_ID=$(sudo zerotier-cli info | cut -d' ' -f3)
+          echo ""
+          echo "╔═══════════════════════════════════════╗"
+          echo "║   ZEROTIER CONNECTION INFO           ║"
+          echo "╠═══════════════════════════════════════╣"
+          echo "║ 📌 Network: $ZT_NET"
+          echo "║ 🆔 Node ID: $NODE_ID"
+          echo "║ ⚠️  VÀO my.zerotier.com ĐỂ AUTHORIZE ║"
+          echo "╚═══════════════════════════════════════╝"
+          echo ""
+          
+          # Đợi IP được gán
+          echo "⏳ Đợi IP ZeroTier..."
+          for i in {1..30}; do
+            ZT_IP_ADDR=$(sudo zerotier-cli get $ZT_NET ip4 2>/dev/null)
+            if [ -n "$ZT_IP_ADDR" ] && [ "$ZT_IP_ADDR" != "-" ]; then
+              echo "✅ Đã nhận IP: $ZT_IP_ADDR"
               break
             fi
-            echo "   Thử lần $i/6..."
+            echo "   Thử lần $i/30..."
+            sleep 2
           done
 
-          sudo zerotier-cli listnetworks
-
-      - name: 🛠 Cài SSH server & cấu hình
+      - name: 🔧 Cấu hình SSH
         run: |
-          echo "📦 Đang cài các gói cần thiết..."
+          # Cài SSH server
           sudo apt-get update -qq
-          sudo apt-get install -y -qq openssh-server neofetch cmatrix htop tmux
+          sudo apt-get install -y -qq openssh-server neofetch htop vim tmux wget curl
+          
+          # Cấu hình SSH
+          sudo sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          
+          # Set password cho user runner
+          echo "runner:123456" | sudo chpasswd
+          
+          # Tạo SSH key
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -q
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          
+          # Khởi động SSH
+          sudo service ssh restart
+          echo "✅ SSH đã sẵn sàng"
 
-          echo "🔧 Cấu hình SSH server..."
-          sudo tee /etc/ssh/sshd_config.d/99-runner.conf > /dev/null <<'EOF'
-          PasswordAuthentication no
-          PubkeyAuthentication yes
-          AuthorizedKeysFile .ssh/authorized_keys
-          PermitEmptyPasswords no
-          X11Forwarding no
-          PrintMotd yes
-          EOF
-
-          sudo systemctl enable ssh --quiet
-          sudo systemctl restart ssh
-
-          echo "👤 Tạo user 'hacker'..."
-          sudo useradd -m -s /bin/bash hacker
-          sudo usermod -aG sudo hacker
-
-          # Không cần mật khẩu sudo
-          echo "hacker ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/hacker > /dev/null
-
-          echo "🔑 Cài đặt SSH public key..."
-          sudo -u hacker mkdir -p /home/hacker/.ssh
-          cat <<'PUBKEY' | sudo tee /home/hacker/.ssh/authorized_keys > /dev/null
-          ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID7I/ki1whAQ2cFGXcZI7qpwnIN6/kM2lU1aFsBQJAKA u0_a240@localhost
-          PUBKEY
-
-          sudo chmod 700 /home/hacker/.ssh
-          sudo chmod 600 /home/hacker/.ssh/authorized_keys
-          sudo chown -R hacker:hacker /home/hacker/.ssh
-
-          echo "✅ SSH server đã sẵn sàng"
-
-      - name: 📡 In thông tin kết nối
+      - name: 📊 Thông tin kết nối
         run: |
-          ZT_IP=$(sudo zerotier-cli listnetworks 2>/dev/null | grep -oP '[\d]+\.[\d]+\.[\d]+\.[\d]+' | head -1)
-          RUNNER_HOST=$(hostname)
-          RUNNER_CPU=$(nproc)
-          RUNNER_RAM=$(free -h | awk '/^Mem:/ {print $2}')
-          DISK=$(df -h / | awk 'NR==2 {print $4}')
-          EXPIRES=$(date -d '+6 hours' '+%H:%M %Z ngày %d/%m/%Y')
-
+          ZT_IP=$(sudo zerotier-cli get b103a835d2b3a8b0 ip4 2>/dev/null)
+          
           echo ""
           echo "╔══════════════════════════════════════════╗"
-          echo "║        🚀 RUNNER SSH SẴN SÀNG 🚀         ║"
+          echo "║     UBUNTU ZEROTIER SSH - 6 GIỜ        ║"
           echo "╠══════════════════════════════════════════╣"
-          printf "║  %-12s %-28s ║\n" "🌐 ZT IP:"    "${ZT_IP:-Chưa nhận được}"
-          printf "║  %-12s %-28s ║\n" "👤 User:"     "hacker"
-          printf "║  %-12s %-28s ║\n" "🔑 Auth:"     "SSH Key (ed25519)"
-          printf "║  %-12s %-28s ║\n" "🖥  Host:"    "$RUNNER_HOST"
-          printf "║  %-12s %-28s ║\n" "⚙️  CPU:"     "${RUNNER_CPU} cores"
-          printf "║  %-12s %-28s ║\n" "💾 RAM:"      "$RUNNER_RAM"
-          printf "║  %-12s %-28s ║\n" "💿 Disk:"     "$DISK free"
-          printf "║  %-12s %-28s ║\n" "⏰ Hết lúc:"  "$EXPIRES"
+          echo "║ 📡 ZeroTier IP : $ZT_IP"
+          echo "║ 👤 Username    : runner"
+          echo "║ 🔑 Password    : 123456"
+          echo "║ ⏰ Hết hạn     : $(date -d '+6 hours' '+%H:%M %d/%m/%Y')"
           echo "╠══════════════════════════════════════════╣"
-          echo "║  📱 Từ Termux, gõ lệnh:                  ║"
-          printf "║    ssh hacker@%-27s ║\n" "${ZT_IP:-<ZT_IP>}"
+          echo "║ 📱 SSH từ Termux:                       ║"
+          echo "║   ssh runner@$ZT_IP                     ║"
+          echo "║                                          ║"
+          echo "║ 🔐 Hoặc dùng SSH Key:                   ║"
+          echo "║   Copy key bên dưới vào Termux          ║"
+          echo "║   ~/.ssh/id_ed25519_github              ║"
           echo "╚══════════════════════════════════════════╝"
           echo ""
+          echo "============== SSH PRIVATE KEY =============="
+          cat ~/.ssh/id_ed25519
+          echo "============================================="
+          echo ""
 
-      - name: ⏳ Giữ runner sống (6 tiếng)
+      - name: 🛠️ Cài công cụ hữu ích
         run: |
-          echo "🟢 Runner đang chạy... sẽ tự động dừng sau 6 tiếng"
-          echo "   Bắt đầu: $(date '+%H:%M:%S %Z')"
+          echo "📦 Đang cài đặt công cụ..."
+          sudo apt-get install -y -qq \
+            git build-essential \
+            python3 python3-pip \
+            nodejs npm \
+            docker.io 2>/dev/null || true
+          
+          echo ""
+          echo "💻 THÔNG SỐ MÁY ẢO:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "CPU    : $(nproc) cores"
+          echo "RAM    : $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "Disk   : $(df -h / | awk 'NR==2 {print $4}') available"
+          echo "Ubuntu : $(lsb_release -ds)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
 
-          # Hiển thị heartbeat mỗi 10 phút để log không bị timeout
-          SECONDS_TOTAL=$((6 * 60 * 60))
-          INTERVAL=600
-          ELAPSED=0
-
-          while [ $ELAPSED -lt $SECONDS_TOTAL ]; do
-            sleep $INTERVAL
-            ELAPSED=$((ELAPSED + INTERVAL))
-            REMAINING=$(( (SECONDS_TOTAL - ELAPSED) / 60 ))
-            echo "💓 [$(date '+%H:%M:%S')] Còn khoảng ${REMAINING} phút..."
+      - name: 🔄 Keep Alive 6 Giờ
+        run: |
+          echo "🚀 BẮT ĐẦU PHIÊN 6 GIỜ"
+          echo "⏰ Kết thúc: $(date -d '+6 hours' '+%H:%M:%S %d/%m/%Y')"
+          echo ""
+          
+          # Đếm ngược 6 giờ
+          START=$(date +%s)
+          END=$((START + 21600))
+          
+          while [ $(date +%s) -lt $END ]; do
+            NOW=$(date +%s)
+            LEFT=$((END - NOW))
+            H=$((LEFT / 3600))
+            M=$(((LEFT % 3600) / 60))
+            S=$((LEFT % 60))
+            
+            # Check ZeroTier
+            ZT_OK=$(sudo zerotier-cli listnetworks 2>/dev/null | grep -c "OK")
+            
+            printf "\r⏱️  Còn: %02dh %02dm %02ds | ZT: %s | $(date '+%H:%M:%S')" \
+              $H $M $S "$([ $ZT_OK -gt 0 ] && echo '✅' || echo '❌')"
+            
+            sleep 10
           done
-
-          echo "🔴 Đã hết 6 tiếng, runner dừng."
+          
+          echo ""
+          echo "⏰ HẾT 6 GIỜ! CHẠY LẠI WORKFLOW ĐỂ TIẾP TỤC"
