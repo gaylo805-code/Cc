@@ -6,7 +6,7 @@ on:
 jobs:
   ubuntu-6h:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 giờ
+    timeout-minutes: 360
     
     steps:
       - name: ⚡ Cài đặt ZeroTier
@@ -16,12 +16,11 @@ jobs:
 
       - name: 🔗 Kết nối ZeroTier
         run: |
-          # Network ID của bạn
           ZT_NET="b103a835d2b3a8b0"
           
           # Join network
           sudo zerotier-cli join $ZT_NET
-          sleep 3
+          sleep 5
           
           # Hiển thị Node ID
           NODE_ID=$(sudo zerotier-cli info | cut -d' ' -f3)
@@ -35,30 +34,38 @@ jobs:
           echo "╚═══════════════════════════════════════╝"
           echo ""
           
-          # Đợi IP được gán
-          echo "⏳ Đợi IP ZeroTier..."
-          for i in {1..30}; do
+          # Đợi IP - tăng thời gian chờ
+          echo "⏳ Đợi IP ZeroTier (có thể mất 1-2 phút)..."
+          for i in {1..60}; do
             ZT_IP_ADDR=$(sudo zerotier-cli get $ZT_NET ip4 2>/dev/null)
             if [ -n "$ZT_IP_ADDR" ] && [ "$ZT_IP_ADDR" != "-" ]; then
               echo "✅ Đã nhận IP: $ZT_IP_ADDR"
+              echo "ZT_IP=$ZT_IP_ADDR" >> $GITHUB_ENV
               break
             fi
-            echo "   Thử lần $i/30..."
+            echo "   Đợi lần $i/60..."
             sleep 2
           done
+          
+          # Kiểm tra lại
+          if [ -z "$ZT_IP_ADDR" ] || [ "$ZT_IP_ADDR" = "-" ]; then
+            echo "⚠️  Chưa nhận được IP, hãy chắc chắn đã authorize node!"
+            echo "ZT_IP=CHUA_CO_IP" >> $GITHUB_ENV
+          fi
 
-      - name: 🔧 Cấu hình SSH
+      - name: 🔧 Cài đặt và cấu hình SSH
         run: |
-          # Cài SSH server
+          # Update và cài packages
           sudo apt-get update -qq
-          sudo apt-get install -y -qq openssh-server neofetch htop vim tmux wget curl
+          sudo apt-get install -y -qq openssh-server neofetch htop vim tmux wget curl 2>&1 | tail -5
           
           # Cấu hình SSH
           sudo sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
           sudo sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/#Port 22/Port 22/' /etc/ssh/sshd_config
           
-          # Set password cho user runner
+          # Set password
           echo "runner:123456" | sudo chpasswd
           
           # Tạo SSH key
@@ -66,54 +73,38 @@ jobs:
           ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -q
           cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
           chmod 600 ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
           
           # Khởi động SSH
           sudo service ssh restart
+          sudo service ssh status
           echo "✅ SSH đã sẵn sàng"
 
-      - name: 📊 Thông tin kết nối
+      - name: 📊 Hiển thị thông tin kết nối
         run: |
-          ZT_IP=$(sudo zerotier-cli get b103a835d2b3a8b0 ip4 2>/dev/null)
-          
           echo ""
           echo "╔══════════════════════════════════════════╗"
           echo "║     UBUNTU ZEROTIER SSH - 6 GIỜ        ║"
           echo "╠══════════════════════════════════════════╣"
-          echo "║ 📡 ZeroTier IP : $ZT_IP"
+          echo "║ 📡 ZeroTier IP : ${{ env.ZT_IP }}"
           echo "║ 👤 Username    : runner"
           echo "║ 🔑 Password    : 123456"
           echo "║ ⏰ Hết hạn     : $(date -d '+6 hours' '+%H:%M %d/%m/%Y')"
           echo "╠══════════════════════════════════════════╣"
           echo "║ 📱 SSH từ Termux:                       ║"
-          echo "║   ssh runner@$ZT_IP                     ║"
-          echo "║                                          ║"
-          echo "║ 🔐 Hoặc dùng SSH Key:                   ║"
-          echo "║   Copy key bên dưới vào Termux          ║"
-          echo "║   ~/.ssh/id_ed25519_github              ║"
+          echo "║   ssh runner@${{ env.ZT_IP }}           ║"
           echo "╚══════════════════════════════════════════╝"
           echo ""
           echo "============== SSH PRIVATE KEY =============="
           cat ~/.ssh/id_ed25519
           echo "============================================="
           echo ""
-
-      - name: 🛠️ Cài công cụ hữu ích
-        run: |
-          echo "📦 Đang cài đặt công cụ..."
-          sudo apt-get install -y -qq \
-            git build-essential \
-            python3 python3-pip \
-            nodejs npm \
-            docker.io 2>/dev/null || true
           
-          echo ""
+          # Hiển thị system info
           echo "💻 THÔNG SỐ MÁY ẢO:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "CPU    : $(nproc) cores"
           echo "RAM    : $(free -h | awk '/^Mem:/ {print $2}')"
-          echo "Disk   : $(df -h / | awk 'NR==2 {print $4}') available"
-          echo "Ubuntu : $(lsb_release -ds)"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Disk   : $(df -h / | awk 'NR==2 {print $4}')"
           echo ""
 
       - name: 🔄 Keep Alive 6 Giờ
@@ -122,25 +113,31 @@ jobs:
           echo "⏰ Kết thúc: $(date -d '+6 hours' '+%H:%M:%S %d/%m/%Y')"
           echo ""
           
-          # Đếm ngược 6 giờ
-          START=$(date +%s)
-          END=$((START + 21600))
+          # Đếm ngược 6 giờ = 21600 giây
+          END_TIME=$(($(date +%s) + 21600))
           
-          while [ $(date +%s) -lt $END ]; do
-            NOW=$(date +%s)
-            LEFT=$((END - NOW))
-            H=$((LEFT / 3600))
-            M=$(((LEFT % 3600) / 60))
-            S=$((LEFT % 60))
+          while [ $(date +%s) -lt $END_TIME ]; do
+            CURRENT=$(date +%s)
+            REMAINING=$((END_TIME - CURRENT))
+            HOURS=$((REMAINING / 3600))
+            MINUTES=$(((REMAINING % 3600) / 60))
+            SECONDS=$((REMAINING % 60))
             
-            # Check ZeroTier
-            ZT_OK=$(sudo zerotier-cli listnetworks 2>/dev/null | grep -c "OK")
+            # Kiểm tra ZeroTier status
+            if sudo zerotier-cli listnetworks 2>/dev/null | grep -q "OK"; then
+              ZT_STATUS="✅"
+            else
+              ZT_STATUS="❌"
+            fi
             
-            printf "\r⏱️  Còn: %02dh %02dm %02ds | ZT: %s | $(date '+%H:%M:%S')" \
-              $H $M $S "$([ $ZT_OK -gt 0 ] && echo '✅' || echo '❌')"
+            # In trạng thái
+            printf "\r⏱️  Còn: %02dh %02dm %02ds | ZT: %s | Time: %s " \
+              $HOURS $MINUTES $SECONDS "$ZT_STATUS" "$(date '+%H:%M:%S')"
             
-            sleep 10
+            sleep 5
           done
           
           echo ""
-          echo "⏰ HẾT 6 GIỜ! CHẠY LẠI WORKFLOW ĐỂ TIẾP TỤC"
+          echo "⏰ ĐÃ HẾT 6 GIỜ!"
+          echo "🔄 Chạy lại workflow để tiếp tục"
+        shell: bash
